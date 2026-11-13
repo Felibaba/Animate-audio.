@@ -280,4 +280,63 @@ async function save(){if(run||busy)return;parse();if(!parts.length){status('err'
   status('work','Step 3 of 3 \u00b7 Finishing MP4','Packing picture and voice into one file\u2026',null);await ve.flush();await ae.flush();mux.finalize();
   if(dlu)URL.revokeObjectURL(dlu);dlu=URL.createObjectURL(new Blob([mux.target.buffer],{type:'video/mp4'}));const a=$('dl');a.href=dlu;a.download='talking-host.mp4';a.textContent='\u2B07 Download MP4';a.hidden=false;
   status('ok','Video ready \u2713',(mux.target.buffer.byteLength/1048575).toFixed(1)+' MB \u00b7 picture and voice in one MP4.',100);try{a.click()}catch(e){}
- }catch(e){status(e.message=='Cancelled'?'work
+ }catch(e){status(e.message=='Cancelled'?'work':'err',e.message=='Cancelled'?'Cancelled':'Could not save video',e.message=='Cancelled'?'Nothing was saved.':explain(e))}
+ setSize(ow,oh);cur='';busy=false;btns(false)}
+
+/* ---------- uploaded audio: find speech and pauses, then spread the script over them ---------- */
+const wordIdx=lt=>upl?upl.words.findIndex(q=>lt>=q.t0&&lt<q.t1+.04):-1;
+function analyze(buf){
+ const ch=buf.numberOfChannels,n=buf.length,sr=buf.sampleRate,m=new Float32Array(n);
+ for(let c=0;c<ch;c++){const d=buf.getChannelData(c);for(let i=0;i<n;i++)m[i]+=d[i]/ch}
+ const hop=Math.max(1,Math.round(sr*.01)),nf=Math.floor(n/hop),e=new Float32Array(nf);
+ for(let f=0;f<nf;f++){let s=0;for(let i=f*hop,j=i+hop;i<j;i++)s+=m[i]*m[i];e[f]=Math.sqrt(s/hop)}
+ const sm=new Float32Array(nf);for(let f=0;f<nf;f++){let s=0,c=0;for(let k=-2;k<=2;k++)if(e[f+k]!==undefined){s+=e[f+k];c++}sm[f]=s/c}
+ const so=Float32Array.from(sm).sort(),floor=so[Math.floor(nf*.1)]||0,peak=so[Math.floor(nf*.95)]||0,thr=Math.max(floor*3,peak*.08,1e-4);
+ let segs=[],a=-1;for(let f=0;f<=nf;f++){const on=f<nf&&sm[f]>thr;if(on&&a<0)a=f;else if(!on&&a>=0){segs.push([a*.01,f*.01]);a=-1}}
+ const mg=[];for(const s of segs){const l=mg[mg.length-1];if(l&&s[0]-l[1]<.18)l[1]=s[1];else mg.push(s.slice())}
+ segs=mg.filter(s=>s[1]-s[0]>=.06).map(s=>[Math.max(0,s[0]-.03),Math.min(buf.duration,s[1]+.04)]);
+ if(!segs.length)segs=[[0,buf.duration]];
+ return{mono:m,segs}}
+function align(){if(!upl)return;
+ const T=$('sc').value.replace(/\s+/g,' ').trim().split(' ').filter(Boolean),n=T.length,segs=upl.segs;
+ if(!n){upl.words=[];upl.msg='paste your script to sync the words';updUI();return}
+ const strong=w=>/[.!?\u2026]["'\u201d)\]]*$/.test(w),weak=w=>strong(w)||/[,;:\u2014]["'\u201d)\]]*$/.test(w);
+ const wgt=w=>{const L=w.replace(/[^a-z0-9]/gi,'').length;return L?.5+Math.max(1,(w.match(/[aeiouy]+/gi)||[]).length)+L*.12:.5};
+ const sent=[];let s0=0;T.forEach((w,i)=>{if(strong(w)||i==n-1){const t=T.slice(s0,i+1).join(' ');for(let j=s0;j<=i;j++)sent[j]=t;s0=i+1}});
+ const ends=f=>{const b=[];T.forEach((w,i)=>{if(i<n-1&&f(w))b.push(i)});return b};
+ const gaps=segs.slice(1).map((s,i)=>({i,d:s[0]-segs[i][1]}));
+ const pick=k=>gaps.length<k?null:gaps.slice().sort((a,b)=>b.d-a.d).slice(0,k).map(g=>g.i).sort((a,b)=>a-b);
+ let bnd=ends(weak),sel=pick(bnd.length);if(!sel){bnd=ends(strong);sel=pick(bnd.length)}if(!sel){bnd=[];sel=[]}
+ const words=[];
+ for(let r=0;r<=bnd.length;r++){
+  const a=r?bnd[r-1]+1:0,b=r<bnd.length?bnd[r]:n-1,sa=r?sel[r-1]+1:0,sb=r<sel.length?sel[r]:segs.length-1,rs=segs.slice(sa,sb+1);
+  const S=rs.reduce((p,q)=>p+q[1]-q[0],0),ws=T.slice(a,b+1).map(wgt),W=ws.reduce((p,q)=>p+q,0);
+  const mp=(p,end)=>{for(const q of rs){const l=q[1]-q[0];if(end?p<=l+1e-6:p<l)return q[0]+Math.min(p,l);p-=l}return rs[rs.length-1][1]};
+  let c=0;ws.forEach((x,j)=>{const p0=c/W*S;c+=x;words.push({w:T[a+j],s:sent[a+j],t0:mp(p0,false),t1:mp(c/W*S,true)})})}
+ upl.words=words;upl.msg=segs.length+' speech parts \u00b7 '+words.length+' words synced';updUI()}
+function updUI(){$('ux').hidden=!upl;$('rt').disabled=!!upl;
+ $('au').textContent=upl?upl.name+' \u00b7 '+upl.buf.duration.toFixed(1)+' s \u00b7 '+(upl.msg||''):'No audio uploaded. Using your voice server or the browser voice.'}
+async function playU(){if(busy)return;if(run){stop();return}
+ if(!upl.words.length){status('err','Paste your script first','The words are synced to your audio from the script.');return}
+ AC();$('sp').hidden=true;run=true;const g0=++gen;$('go').textContent='\u23F9 Stop';
+ await new Promise(res=>{const t=AX.currentTime+.08,s=AX.createBufferSource();s.buffer=upl.buf;s.connect(an);aud={dur:upl.buf.duration,t0:t,words:upl.words,s,k:-2};s.onended=()=>{aud=null;res()};s.start(t)});
+ if(g0==gen){await sleep(500);stop()}}
+$('ub').onclick=()=>$('af').click();
+$('af').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;stop();
+ try{AC();$('au').textContent='Reading '+f.name+'\u2026';const buf=await AX.decodeAudioData(await f.arrayBuffer()),a=analyze(buf);upl={buf,name:f.name,mono:a.mono,segs:a.segs,words:[],msg:''};align();$('sp').hidden=true}
+ catch(err){upl=null;updUI();status('err','Couldn\u2019t read that audio','Try an mp3, wav or m4a file.')}};
+$('ux').onclick=()=>{stop();upl=null;updUI()};
+/* ---------- wiring ---------- */
+$('go').onclick=()=>upl?playU():play();$('rc').onclick=save;$('cx').onclick=()=>{stopF=true};
+$('tt').onclick=async()=>{$('tt').disabled=true;try{status('work','Testing your voice server','Calling '+ep()+'\u2026',null);const b=await fetchAudio('Hi, this is my new voice.');const s=AX.createBufferSource();s.buffer=b;s.connect(an);s.start();status('ok','Voice server works \u2713','Got '+b.duration.toFixed(1)+' s of audio.',100)}catch(e){status('err','Voice test failed',explain(e))}$('tt').disabled=false};
+function vl(){try{voices=SS.getVoices().filter(v=>/^en/i.test(v.lang));$('vo').innerHTML=voices.map((v,i)=>'<option value="'+i+'">'+v.name+'</option>').join('')||'<option>Default voice</option>'}catch(e){}}vl();try{SS.onvoiceschanged=vl}catch(e){}
+const lsg=k=>{try{return localStorage.getItem(k)}catch(e){return null}},lss=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+$('sc').value=lsg('th_sc')||'Most people think small. Think bigger! Think in systems. What if you could build something that lasts? Imagine the future. Then just start.';$('tu').value=lsg('th_tu')||'';$('tk').value=lsg('th_tk')||'';
+const info=()=>{parse();const n=($('sc').value.match(/\S+/g)||[]).length;$('cn').textContent=n?n+' words \u00b7 about '+Math.max(1,Math.round(n/2.5/+$('rt').value))+' s':''};
+$('sc').oninput=()=>{lss('th_sc',$('sc').value);info();align()};const rl=()=>{const v=+$('rt').value;$('rl').textContent=(v<.75?'Slow':v<.95?'Relaxed':v<1.15?'Normal':'Fast')+' \u00b7 '+v.toFixed(2)+'\u00d7'};rl();$('rt').oninput=()=>{info();rl()};$('tu').oninput=()=>lss('th_tu',$('tu').value);$('tk').oninput=()=>lss('th_tk',$('tk').value);info();updUI();
+const im=$('src');const go=()=>{img=im;if(glOK)try{initGL(im)}catch(e){glOK=false}requestAnimationFrame(loop)};
+const wt=e=>e.complete?Promise.resolve():new Promise(r=>e.onload=r);Promise.all([wt(im),wt($('hmk'))]).then(()=>document.fonts?document.fonts.load('900 60px Rubik').catch(()=>{}):0).then(go);
+})();
+</script>
+</body>
+</html>
